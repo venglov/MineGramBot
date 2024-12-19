@@ -1,0 +1,13 @@
+rcon:
+  host: "127.0.0.1"
+  port: 25575
+
+paths:
+  backup_dir: "/path/to/backups"
+  world_path: "/path/to/world"
+  log_path: "/path/to/logs/latest.log"
+
+telegram:
+  chat_id: 11111111111
+  authorized_user_ids:
+    - 11111111111

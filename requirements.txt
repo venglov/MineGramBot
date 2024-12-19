@@ -1,0 +1,3 @@
+mcrcon==0.7.0
+python-telegram-bot==21.9
+PyYAML==6.0.2
