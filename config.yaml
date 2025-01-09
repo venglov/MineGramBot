@@ -3,8 +3,8 @@ rcon:
   port: 25575
 
 paths:
-  backup_dir: "/path/to/backups"
-  world_path: "/path/to/world"
+  backup_path: "/path/to/backups"
+  world_path: "/path/to/World"
   log_path: "/path/to/logs/latest.log"
 
 telegram:

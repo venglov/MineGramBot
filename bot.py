@@ -6,8 +6,8 @@ import time
 import subprocess
 import asyncio
 from threading import Thread
-from mcrcon import MCRcon
-from telegram import Update, constants
+from aiomcrcon import Client
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,7 +30,7 @@ if not TELEGRAM_BOT_TOKEN or not RCON_PASSWORD:
 RCON_HOST = config["rcon"]["host"]
 RCON_PORT = config["rcon"]["port"]
 
-BACKUP_DIR = config["paths"]["backup_dir"]
+BACKUP_PATH = config["paths"]["backup_path"]
 WORLD_PATH = config["paths"]["world_path"]
 LOG_PATH = config["paths"]["log_path"]
 
@@ -48,10 +48,10 @@ logger = logging.getLogger(__name__)
 RESTORE_BACKUP_SELECT = 1
 
 
-def send_rcon_command(command: str) -> str:
+async def send_rcon_command(command: str) -> tuple[str, int] | str:
     try:
-        with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
-            resp = mcr.command(command)
+        async with Client(RCON_HOST, RCON_PORT, RCON_PASSWORD) as mcr:
+            resp = await mcr.send_cmd(command)
             return resp
     except Exception as e:
         return f"Error sending RCON command: {e}"
@@ -64,10 +64,10 @@ def is_authorized(user_id: int) -> bool:
 def list_backup_files() -> list:
     try:
         files = [
-            f for f in os.listdir(BACKUP_DIR)
-            if os.path.isfile(os.path.join(BACKUP_DIR, f)) and f.endswith(('.zip', '.tar.gz', '.tar.bz2'))
+            f for f in os.listdir(BACKUP_PATH)
+            if os.path.isfile(os.path.join(BACKUP_PATH, f)) and f.endswith(('.zip', '.tar.gz', '.tar.bz2'))
         ]
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(BACKUP_DIR, x)), reverse=True)
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(BACKUP_PATH, x)), reverse=True)
         return files
     except Exception as e:
         logger.error(f"Error listing backup files: {e}")
@@ -177,7 +177,7 @@ async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Please enter a valid number corresponding to the backup.")
         return ConversationHandler.END
 
-    backup_path = os.path.join(BACKUP_DIR, selected_backup)
+    backup_path = os.path.join(BACKUP_PATH, selected_backup)
     await update.message.reply_text("⚙️ Initiating backup restoration process...")
     stop_result = subprocess.run(
         ["sudo", "systemctl", "stop", "minecraft.service"],
@@ -190,12 +190,16 @@ async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Failed to stop the server. Aborting restoration.")
         return ConversationHandler.END
 
+    await asyncio.sleep(2)
+
     try:
         subprocess.run(["rm", "-rf", WORLD_PATH], check=True)
         await update.message.reply_text("🗑️ Existing world data removed.")
     except subprocess.CalledProcessError as e:
         await update.message.reply_text(f"❌ Failed to remove world data: {e}")
         return ConversationHandler.END
+
+    await asyncio.sleep(2)
 
     try:
         unzip_result = subprocess.run(
@@ -211,6 +215,8 @@ async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as e:
         await update.message.reply_text(f"❌ Error during restoration: {e}")
         return ConversationHandler.END
+
+    await asyncio.sleep(2)
 
     start_result = subprocess.run(
         ["sudo", "systemctl", "start", "minecraft.service"],
@@ -231,10 +237,13 @@ async def cancel_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def forward_to_minecraft(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     if update.message.from_user.is_bot:
         return
     if update.effective_chat.id != TELEGRAM_CHAT_ID:
         return
+
     if update.message.text:
         msg = update.message.text
     elif update.message.caption:
@@ -243,9 +252,30 @@ async def forward_to_minecraft(update: Update, context: ContextTypes.DEFAULT_TYP
         msg_type = update.message.effective_attachment.__class__.__name__ if update.message.effective_attachment else "Non-text"
         msg = f"[{msg_type} message]"
 
-    response = send_rcon_command(f'tellraw @a ["<Telegram> ",{{"text":"{msg}"}}]')
+    msg = msg.replace('"', '\\"').replace('\n', '\\n')
+
+    response = await send_rcon_command(
+        f'tellraw @a ["<{update.message.from_user.full_name}> ",{{"text":"{msg}"}}]'
+    )
+
     if "Error" in response:
         logger.error(response)
+        await update.message.reply_text("Failed to send message to Minecraft server")
+
+
+async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await update.message.reply_text("🚫 You are not authorized to perform this action.")
+        return
+
+    command = update.message.text[1:]
+    response = await send_rcon_command(command)
+    if "Error" in response:
+        logger.error(response)
+        await update.message.reply_text("Failed to send command to Minecraft server")
+    else:
+        await update.message.reply_text(f"Command executed!")
 
 
 async def handle_non_command_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,15 +295,20 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def monitor_minecraft_log(application, chat_id: int, loop):
-    chat_regex = re.compile(r'^\[.*\] \[.*\/INFO\] \[.*\/\]: (?:\[[^\]]+\] )?<([^>]+)> (.+)$')
+    chat_regex = re.compile(r'^\[\d{2}:\d{2}:\d{2}\] \[Server thread\/INFO\]: <([^>]+)> (.+)$')
 
     try:
         with open(LOG_PATH, "r") as f:
             f.seek(0, 2)
+            current_inode = os.fstat(f.fileno()).st_ino
+
             while True:
                 line = f.readline()
                 if not line:
                     time.sleep(0.5)
+                    if os.stat(LOG_PATH).st_ino != current_inode:
+                        logger.info("Log file rotated, reopening...")
+                        break
                     continue
 
                 match = chat_regex.match(line.strip())
@@ -309,17 +344,24 @@ def run_bot():
         allow_reentry=True,
     )
 
-    application.add_handler(CommandHandler("start", start, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
-    application.add_handler(CommandHandler("help", help_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
-    application.add_handler(CommandHandler("status", status_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
-    application.add_handler(CommandHandler("stop", stop_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
-    application.add_handler(CommandHandler("run", start_minecraft, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
-    application.add_handler(CommandHandler("restart", restart_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID)))
+    application.add_handler(CommandHandler("start", start, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
+    application.add_handler(
+        CommandHandler("help", help_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
+    application.add_handler(
+        CommandHandler("status", status_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
+    application.add_handler(
+        CommandHandler("stop", stop_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
+    application.add_handler(
+        CommandHandler("run", start_minecraft, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
+    application.add_handler(
+        CommandHandler("restart", restart_command, filters=filters.Chat(chat_id=TELEGRAM_CHAT_ID), block=False))
     application.add_handler(restore_backup_conv)
     application.add_handler(MessageHandler(
+        filters.COMMAND & filters.Chat(chat_id=TELEGRAM_CHAT_ID),
+        handle_unknown_command, block=False))
+    application.add_handler(MessageHandler(
         filters.ALL & filters.Chat(chat_id=TELEGRAM_CHAT_ID) & ~filters.COMMAND,
-        handle_non_command_message
-    ))
+        handle_non_command_message, block=False))
     application.add_error_handler(error_handler)
 
     loop = asyncio.new_event_loop()
@@ -328,7 +370,6 @@ def run_bot():
     monitor_thread = Thread(target=monitor_minecraft_log, args=(application, TELEGRAM_CHAT_ID, loop), daemon=True)
     monitor_thread.start()
     logger.info("Started Minecraft log monitoring thread.")
-
     application.run_polling()
 
 
