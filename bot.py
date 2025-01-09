@@ -76,18 +76,18 @@ def list_backup_files() -> list:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hello! I am connected to the Minecraft server. Use /help for a list of commands."
+        "Привет! Я подключен к серверу Minecraft. Используй /help."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     commands = [
-        "/help - Show this help message",
-        "/status - Show server status",
-        "/stop - Stop the Minecraft server",
-        "/run - Start the Minecraft server",
-        "/restart - Restart the Minecraft server",
-        "/restorebackup - Restore a backup from the backup folder",
+        "/help - Посмотреть это сообщение",
+        "/status - Узнать состояние сервера",
+        "/stop - Остановить сервер",
+        "/run - Запустить сервер",
+        "/restart - Перезапустить сервер",
+        "/restorebackup - Восстановить сервер из бэкапа",
     ]
     await update.message.reply_text("\n".join(commands))
 
@@ -99,54 +99,54 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=True,
     )
     if status.stdout.strip() == "active":
-        await update.message.reply_text("✅ The Minecraft server is currently running.")
+        await update.message.reply_text("✅ Сервер сейчас работает.")
     else:
-        await update.message.reply_text("❌ The Minecraft server is not running.")
+        await update.message.reply_text("❌ Сервер в отключке.")
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to stop the server.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return
     subprocess.run(["sudo", "systemctl", "stop", "minecraft.service"])
-    await update.message.reply_text("⚙️ Server stopping...")
+    await update.message.reply_text("⚙️ Сервер пытается остановиться...")
 
 
 async def start_minecraft(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to start the server.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return
     subprocess.run(["sudo", "systemctl", "start", "minecraft.service"])
-    await update.message.reply_text("⚙️ Server starting...")
+    await update.message.reply_text("⚙️ Сервер запускается...")
 
 
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to restart the server.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return
     subprocess.run(["sudo", "systemctl", "restart", "minecraft.service"])
-    await update.message.reply_text("🔄 Server restarting...")
+    await update.message.reply_text("🔄 Сервер перезапускается!")
 
 
 async def restore_backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to restore backups.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return ConversationHandler.END
 
     backups = list_backup_files()
     if not backups:
-        await update.message.reply_text("❌ No backup files found in the backup directory.")
+        await update.message.reply_text("❌ Резервные копии где-то потерялись.")
         return ConversationHandler.END
 
-    message = "📦 Available Backups:\n"
+    message = "📦 Смотри, что нашлось:\n"
     for idx, backup in enumerate(backups, start=1):
         message += f"{idx}. <code>{backup}</code>\n"
 
-    message += "\nPlease reply with the number of the backup you want to restore."
+    message += "\nРаньше было лучше... но когда? Ответь цифрой."
 
     await update.message.reply_text(message, parse_mode="HTML")
     context.user_data['backups'] = backups
@@ -157,46 +157,46 @@ async def restore_backup_command(update: Update, context: ContextTypes.DEFAULT_T
 async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to perform this action.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return ConversationHandler.END
 
     backups = context.user_data.get('backups', [])
     if not backups:
-        await update.message.reply_text("❌ No backup files available.")
+        await update.message.reply_text("❌ Резервные копии снова куда-то пропали.")
         return ConversationHandler.END
 
     try:
         selection = int(update.message.text)
         if 1 <= selection <= len(backups):
             selected_backup = backups[selection - 1]
-            await update.message.reply_text(f"✅ You selected: {selected_backup}")
+            await update.message.reply_text(f"✅ Ты выбрал: {selected_backup}")
         else:
-            await update.message.reply_text("❌ Invalid selection. Please try /restorebackup again.")
+            await update.message.reply_text("❌ Неправильный выбор. Попробуй снова через /restorebackup.")
             return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("❌ Please enter a valid number corresponding to the backup.")
+        await update.message.reply_text("❌ Введи нормальную цифру, пожалуйста.")
         return ConversationHandler.END
 
     backup_path = os.path.join(BACKUP_PATH, selected_backup)
-    await update.message.reply_text("⚙️ Initiating backup restoration process...")
+    await update.message.reply_text("⚙️ Сейчас всё будет!...")
     stop_result = subprocess.run(
         ["sudo", "systemctl", "stop", "minecraft.service"],
         capture_output=True,
         text=True,
     )
     if stop_result.returncode == 0:
-        await update.message.reply_text("🔒 Server stopped successfully.")
+        await update.message.reply_text("🔒 Сервер отключен.")
     else:
-        await update.message.reply_text("❌ Failed to stop the server. Aborting restoration.")
+        await update.message.reply_text("❌ Не удалось остановить сервер. Восстановление отменяется.")
         return ConversationHandler.END
 
     await asyncio.sleep(2)
 
     try:
         subprocess.run(["rm", "-rf", WORLD_PATH], check=True)
-        await update.message.reply_text("🗑️ Existing world data removed.")
+        await update.message.reply_text("🗑️ Мир уничтожен, как и планировалось.")
     except subprocess.CalledProcessError as e:
-        await update.message.reply_text(f"❌ Failed to remove world data: {e}")
+        await update.message.reply_text(f"❌ Удалить мир не получилось: {e}")
         return ConversationHandler.END
 
     await asyncio.sleep(2)
@@ -208,12 +208,12 @@ async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             text=True,
         )
         if unzip_result.returncode == 0:
-            await update.message.reply_text("📦 Backup restored successfully.")
+            await update.message.reply_text("📦 Бэкап успешно восстановлен.")
         else:
-            await update.message.reply_text(f"❌ Failed to restore backup: {unzip_result.stderr}")
+            await update.message.reply_text(f"❌ Не удалось восстановить бэкап: {unzip_result.stderr}")
             return ConversationHandler.END
     except Exception as e:
-        await update.message.reply_text(f"❌ Error during restoration: {e}")
+        await update.message.reply_text(f"❌ Ошибка восстановления: {e}")
         return ConversationHandler.END
 
     await asyncio.sleep(2)
@@ -224,15 +224,15 @@ async def backup_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text=True,
     )
     if start_result.returncode == 0:
-        await update.message.reply_text("✅ Server started successfully.")
+        await update.message.reply_text("✅ Сервер снова в строю хе-хе.")
     else:
-        await update.message.reply_text("❌ Failed to start the server. Please check the server logs.")
+        await update.message.reply_text("❌ Сервер не запустился. Посмотри логи!")
 
     return ConversationHandler.END
 
 
 async def cancel_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("❌ Backup restoration process canceled.")
+    await update.message.reply_text("❌ Восстановление бэкапа отменено. Уф!")
     return ConversationHandler.END
 
 
@@ -266,7 +266,7 @@ async def forward_to_minecraft(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_authorized(user.id):
-        await update.message.reply_text("🚫 You are not authorized to perform this action.")
+        await update.message.reply_text("🚫У тебя тут нет власти, уходи.")
         return
 
     command = update.message.text[1:]
@@ -275,7 +275,7 @@ async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(response)
         await update.message.reply_text("Failed to send command to Minecraft server")
     else:
-        await update.message.reply_text(f"Command executed!")
+        await update.message.reply_text(f"Будет исполнено!")
 
 
 async def handle_non_command_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
